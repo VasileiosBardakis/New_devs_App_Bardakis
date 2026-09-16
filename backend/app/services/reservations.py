@@ -49,13 +49,26 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
                 from sqlalchemy import text
                 
                 query = text("""
+                    WITH month_bounds AS (
+                        SELECT DATE_TRUNC('month', (r.check_in_date AT TIME ZONE p.timezone)) AS month_start
+                        FROM reservations r
+                        JOIN properties p ON p.id = r.property_id AND p.tenant_id = r.tenant_id
+                        WHERE r.property_id = :property_id AND r.tenant_id = :tenant_id
+                        ORDER BY month_start DESC
+                        LIMIT 1
+                    )
                     SELECT 
-                        property_id,
-                        SUM(total_amount) as total_revenue,
+                        r.property_id,
+                        SUM(r.total_amount) as total_revenue,
                         COUNT(*) as reservation_count
-                    FROM reservations 
-                    WHERE property_id = :property_id AND tenant_id = :tenant_id
-                    GROUP BY property_id
+                    FROM reservations r
+                    JOIN properties p ON p.id = r.property_id AND p.tenant_id = r.tenant_id
+                    JOIN month_bounds mb ON TRUE
+                    WHERE r.property_id = :property_id 
+                    AND r.tenant_id = :tenant_id
+                    AND (r.check_in_date AT TIME ZONE p.timezone) >= mb.month_start
+                    AND (r.check_in_date AT TIME ZONE p.timezone) < mb.month_start + INTERVAL '1 month'
+                    GROUP BY r.property_id
                 """)
                 
                 result = await session.execute(query, {
@@ -87,23 +100,4 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
             
     except Exception as e:
         print(f"Database error for {property_id} (tenant: {tenant_id}): {e}")
-        
-        # Create property-specific mock data for testing when DB is unavailable
-        # This ensures each property shows different figures
-        mock_data = {
-            'prop-001': {'total': '1000.00', 'count': 3},
-            'prop-002': {'total': '4975.50', 'count': 4}, 
-            'prop-003': {'total': '6100.50', 'count': 2},
-            'prop-004': {'total': '1776.50', 'count': 4},
-            'prop-005': {'total': '3256.00', 'count': 3}
-        }
-        
-        mock_property_data = mock_data.get(property_id, {'total': '0.00', 'count': 0})
-        
-        return {
-            "property_id": property_id,
-            "tenant_id": tenant_id, 
-            "total": mock_property_data['total'],
-            "currency": "USD",
-            "count": mock_property_data['count']
-        }
+        raise
